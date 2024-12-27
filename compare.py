@@ -3,8 +3,9 @@ import numpy
 from tkinter import *
 from tkinter import filedialog
 from tkinter import simpledialog
+import os
 
-parameter = 'REFDES'
+parameter = 'RYSE part number'
 description_parameter = 'Description'
 curLng = 'EN'
 class CompareFrame(Frame):
@@ -114,25 +115,35 @@ class CompareFrame(Frame):
         for line in refdes2:
             list_f2.append(line)
         for i in list_f1:
-            if i not in list_f2:
+            if not contains_item(list_f2, i):
                 list_comp.append(i)
         if len(list_comp) > 0:
             with open(bomDiffFileName, 'a') as output:
                 output.write('\n=====================================================================\n')
                 output.write('REMOVE from ' + path_l1[-1] + ': ' + '\n')
                 for each in list_comp:
-                    output.write(each + ": " + str(my_csv_f1[description_parameter][my_csv_f1[parameter] == each].iloc[0]) + '\n')
+                    if pd.isnull(each):
+                        print('line with null value')
+                        continue
+                    print(each)
+                    print(my_csv_f1[description_parameter][my_csv_f1[parameter] == each].iloc[0])
+                    output.write(str(each) + ": " + str(my_csv_f1[description_parameter][my_csv_f1[parameter] == each].iloc[0]) + '\n')
 
         list_comp = []
         for i in list_f2:
-            if i not in list_f1:
+            if not contains_item(list_f1, i):
                 list_comp.append(i)
         if len(list_comp) > 0:
             with open(bomDiffFileName, 'a') as output:
                 output.write('\n=====================================================================\n')
                 output.write('ADD to ' + path_l1[-1] + ': ' + '\n')
                 for each in list_comp:
-                    output.write(each + ": " + str(my_csv_f2[description_parameter][my_csv_f2[parameter] == each].iloc[0]) + '\n')
+                    if pd.isnull(each):
+                        print('line with null value')
+                        continue
+                    print(each)
+                    print(my_csv_f2[description_parameter][my_csv_f2[parameter] == each].iloc[0])
+                    output.write(str(each) + ": " + str(my_csv_f2[description_parameter][my_csv_f2[parameter] == each].iloc[0]) + '\n')
         
         # compare the columns for the parts that are in both files
         with open(bomDiffFileName, 'a') as output:
@@ -144,7 +155,7 @@ class CompareFrame(Frame):
             if column == parameter or column == description_parameter:
                 continue
             for i in list_f1:
-                if i in list_f2:
+                if contains_item(list_f2, i):
                         # if i is not a string or is null, skip it
                         if type(i) != str or pd.isnull(i) or i == 'nan':
                             continue
@@ -196,8 +207,13 @@ class CompareFrame(Frame):
                     output.write('\nMODIFY-' + str(coumnIndx) + ' ' + column + ':\n')
                     output.write(path_l1[-1] + ' ===> ' + path_l2[-1] + '\n')
                     for each in list_comp:
+                        if pd.isnull(each):
+                            print('line with null value')
+                            continue
                         valF1 = my_csv_f1[column][my_csv_f1[parameter] == each].iloc[0]
                         valF2 = my_csv_f2[column][my_csv_f2[parameter] == each].iloc[0]
+                        if pd.isnull(valF1) or pd.isnull(valF2):
+                            continue
                         # if value is float convert it to an int
                         if type(valF1) == numpy.float64:
                             valF1 = int(valF1)
@@ -207,6 +223,14 @@ class CompareFrame(Frame):
                         output.write(each + ": " + str(valF1) + ' ===> ' + str(valF2) + '\n')
             #clear list_comp
             list_comp = []
+        print('Done. If in windows, open the compare file')
+        # open the file if on windows
+        if(os.name == 'nt'):
+            os.startfile(bomDiffFileName)
+
+def contains_item(lst, item):
+    item_str = str(item)
+    return any(str(i) == item_str for i in lst)
 
 if __name__ == "__main__":
     CompareFrame().mainloop()
