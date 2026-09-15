@@ -319,6 +319,22 @@ class CompareFrame(Frame):
                     print(label + ': ' + desc)
                     output.write(label + ': ' + desc + '\n')
 
+        # ---- parts that moved onto a different number of lines ----------
+        # Reported once here, rather than showing up as a bogus change in every
+        # column below (column_values() drops the repeats).
+        relined = [key for key in occ_f1
+                   if key in occ_f2 and len(occ_f1[key]) != len(occ_f2[key])]
+        if relined:
+            with open(bomDiffFileName, 'a', encoding='utf-8') as output:
+                output.write('\n=====================================================================\n')
+                output.write('NUMBER OF LINES CHANGED, ' + path_l1 + ' ===> ' + path_l2 + ':\n')
+                for key in relined:
+                    label = display(my_csv_f1[key_f1].iat[occ_f1[key][0]])
+                    n1, n2 = len(occ_f1[key]), len(occ_f2[key])
+                    print('%s is on %d line(s), then %d' % (label, n1, n2))
+                    output.write('%s: %d line%s ===> %d line%s\n' % (
+                        label, n1, '' if n1 == 1 else 's', n2, '' if n2 == 1 else 's'))
+
         # ---- compare the columns for the parts that are in both files ----
         with open(bomDiffFileName, 'a', encoding='utf-8') as output:
             output.write('\n=====================================================================\n')
@@ -328,26 +344,22 @@ class CompareFrame(Frame):
         for col_f1, col_f2 in pairs:
             diffs = []
             for key in shared:
-                rows_f1 = occ_f1[key]
-                rows_f2 = occ_f2[key]
-                for i_indxF1 in rows_f1:
-                    # find closest row in file 2 for this occurrence
-                    i_indxF2 = min(rows_f2, key=lambda r: abs(r - i_indxF1))
-                    label = display(my_csv_f1[key_f1].iat[i_indxF1])
+                # A part number can legitimately sit on several lines - the same
+                # component used in different sub-assemblies. Those lines cannot
+                # be paired up one to one: their order differs between the files,
+                # so any positional pairing reports imaginary changes. Compare
+                # the whole set of values for the part instead, and report only
+                # when the sets themselves differ.
+                valsF1 = column_values(my_csv_f1, col_f1, occ_f1[key])
+                valsF2 = column_values(my_csv_f2, col_f2, occ_f2[key])
+                if [compare_value(v) for v in valsF1] == [compare_value(v) for v in valsF2]:
+                    continue
 
-                    if len(rows_f1) > 1:
-                        print('Comparing %s for %s at index %d with %d' % (
-                            col_f1, label, i_indxF1, i_indxF2))
-
-                    valF1 = my_csv_f1[col_f1].iat[i_indxF1]
-                    valF2 = my_csv_f2[col_f2].iat[i_indxF2]
-
-                    if norm_value(valF1) == norm_value(valF2):
-                        continue
-                    print('%s differs for %s: %s ===> %s' % (
-                        col_f1, label, display(valF1), display(valF2)))
-                    diffs.append((label, valF1, valF2))
-                    break  # one report per part per column
+                label = display(my_csv_f1[key_f1].iat[occ_f1[key][0]])
+                textF1 = ', '.join(display_cell(v) for v in valsF1)
+                textF2 = ', '.join(display_cell(v) for v in valsF2)
+                print('%s differs for %s: %s ===> %s' % (col_f1, label, textF1, textF2))
+                diffs.append((label, textF1, textF2))
 
             if diffs:
                 coumnIndx += 1
@@ -355,13 +367,112 @@ class CompareFrame(Frame):
                 with open(bomDiffFileName, 'a', encoding='utf-8') as output:
                     output.write('\nMODIFY-' + str(coumnIndx) + ' ' + header + ':\n')
                     output.write(path_l1 + ' ===> ' + path_l2 + '\n')
-                    for label, valF1, valF2 in diffs:
-                        output.write(label + ': ' + display(valF1) + ' ===> ' + display(valF2) + '\n')
+                    for label, textF1, textF2 in diffs:
+                        output.write(label + ': ' + textF1 + ' ===> ' + textF2 + '\n')
 
         print('Done. If in windows, open the compare file')
         # open the file if on windows
         if os.name == 'nt':
             os.startfile(bomDiffFileName)
+
+
+DESIGNATOR = re.compile(r'^([A-Za-z]+)(\d+)$')
+DESIGNATOR_RANGE = re.compile(r'^([A-Za-z]+)(\d+)-([A-Za-z]*)(\d+)$')
+
+
+def designator_set(value):
+    """The individual reference designators a cell names, or None when the cell
+    is not a designator list.
+
+    The same set of parts gets written many ways - 'Q4-5 Q8-10' from Aligni and
+    'Q4,Q5,Q8,Q9,Q10' from the factory mean exactly the same thing - so ranges
+    are expanded and separators dropped before anything is compared. Any cell
+    that is not wholly made of designators (free text in the column, say) gives
+    None, and is then compared as plain text exactly as before."""
+    if is_blank(value):
+        return None
+    found = set()
+    for token in re.split(r'[,;\s]+', str(value).strip()):
+        if not token:
+            continue
+        single = DESIGNATOR.match(token)
+        if single:
+            found.add((single.group(1).upper(), int(single.group(2))))
+            continue
+        spread = DESIGNATOR_RANGE.match(token)
+        if not spread:
+            return None
+        prefix, first, last_prefix, last = spread.groups()
+        prefix = prefix.upper()
+        # 'C15-16' and 'U1-U3' are both ranges; 'Q4-R5' is not one we understand
+        if last_prefix and last_prefix.upper() != prefix:
+            return None
+        first, last = int(first), int(last)
+        if not 0 <= last - first <= 1000:
+            return None
+        found.update((prefix, number) for number in range(first, last + 1))
+    return found or None
+
+
+def format_designators(designators):
+    """Write a designator set out compactly, and the same way for both files:
+    sorted, with consecutive numbers collapsed back into ranges so that long
+    lists stay as short as the factory writes them."""
+    runs = []
+    for prefix, number in sorted(designators):
+        if runs and runs[-1][0] == prefix and runs[-1][2] == number - 1:
+            runs[-1][2] = number
+        else:
+            runs.append([prefix, number, number])
+    return ' '.join('%s%d' % (prefix, first) if first == last
+                    else '%s%d-%d' % (prefix, first, last)
+                    for prefix, first, last in runs)
+
+
+def compare_value(value):
+    """The form of a cell used to decide whether it changed: a reference
+    designator list becomes the designators themselves, so that separators,
+    ranges and ordering cannot masquerade as a change. Everything else is
+    compared as before."""
+    designators = designator_set(value)
+    return norm_value(value) if designators is None else sorted(designators)
+
+
+def display_cell(value):
+    """Printable form of a cell being compared. Designator lists are written
+    out one way - sorted, space separated - so that the two sides of a report
+    line can be read against each other."""
+    designators = designator_set(value)
+    if designators is None:
+        return display(value)
+    return format_designators(designators)
+
+
+def sort_key(value):
+    """Order values so both files present them the same way: blanks first, then
+    numbers in numeric order, then text alphabetically."""
+    comparable = compare_value(value)
+    if comparable is None:
+        return (0, 0.0, '')
+    if isinstance(comparable, float):
+        return (1, comparable, '')
+    if isinstance(comparable, list):
+        return (2, 0.0, display_cell(value))
+    return (2, 0.0, comparable)
+
+
+def column_values(df, column, rows):
+    """The distinct values a column takes across every line of one part.
+
+    A part can legitimately sit on several lines - the same component used in
+    different sub-assemblies - and those lines repeat the description, the
+    manufacturer and so on. Repeats are dropped so that a part landing on a
+    different number of lines does not report a change in every column; that
+    is reported once, on its own, as a line-count change."""
+    distinct = {}
+    for row in rows:
+        distinct.setdefault(str(compare_value(df[column].iat[row])), df[column].iat[row])
+    return sorted(distinct.values(), key=sort_key)
 
 
 def key_positions(df, key_column):
